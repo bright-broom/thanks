@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans:
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo",
+    system-ui, -apple-system, sans-serif;
+}
+
+html,
+body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(203 213 225);
+  background: white;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: rgb(15 23 42);
+}
+.input:focus {
+  outline: 2px solid rgb(15 23 42);
+  outline-offset: -1px;
+}
