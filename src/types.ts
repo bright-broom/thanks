@@ -93,3 +93,41 @@ export type ComposeResult = {
   draft: DraftEmail;
   riskFlags: EmailRiskFlag[];
 };
+
+export type ThankYouEmail = {
+  id: string;
+  status: EmailStatus;
+  input: ComposeInput;
+  draft: DraftEmail;
+  bodyOverride?: string;
+  riskFlags: EmailRiskFlag[];
+  sentAt?: string;
+  sentBy?: string;
+  actualTo?: string;
+  actualCc?: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuditAction =
+  | "generate"
+  | "regenerate"
+  | "edit_body"
+  | "transition"
+  | "risk_check"
+  | "copy"
+  | "mark_sent"
+  | "hold"
+  | "resume";
+
+export type AuditLogEntry = {
+  id: string;
+  emailId: string;
+  action: AuditAction;
+  at: string;
+  actor: string;
+  fromStatus?: EmailStatus;
+  toStatus?: EmailStatus;
+  riskFlagCount?: number;
+  note?: string;
+};
