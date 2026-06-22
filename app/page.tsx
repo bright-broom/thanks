@@ -5,13 +5,41 @@ import { useEffect, useMemo, useRef, useState } from "react";
 type PaymentType = "bank_loan" | "cash";
 type ConstructionDateStatus = "decided" | "undecided";
 type Severity = "low" | "medium" | "high" | "critical";
+type EmailStatus =
+  | "not_created"
+  | "draft_generated"
+  | "pending_review"
+  | "approved"
+  | "sent"
+  | "on_hold"
+  | "error";
 
 type GenerateResponse = {
+  id: string;
+  status: EmailStatus;
   templateType: PaymentType;
   subject: string;
   body: string;
   nextTask: { type: string; dueDate: string | null; reason: string };
   riskFlags: { code: string; severity: Severity; message: string }[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ThankYouEmailRecord = {
+  id: string;
+  status: EmailStatus;
+  draft: {
+    subject: string;
+    body: string;
+    templateType: PaymentType;
+    nextTask: { type: string; dueDate: string | null; reason: string };
+  };
+  bodyOverride?: string;
+  riskFlags: { code: string; severity: Severity; message: string }[];
+  sentAt?: string;
+  sentBy?: string;
+  updatedAt: string;
 };
 
 type FormState = {
@@ -40,6 +68,26 @@ const SEVERITY_LABEL: Record<Severity, string> = {
   low: "低",
 };
 
+const STATUS_LABEL: Record<EmailStatus, string> = {
+  not_created: "未作成",
+  draft_generated: "下書き生成済み",
+  pending_review: "確認中",
+  approved: "承認済み",
+  sent: "送信済み",
+  on_hold: "保留中",
+  error: "エラー",
+};
+
+const STATUS_STYLE: Record<EmailStatus, string> = {
+  not_created: "bg-slate-100 text-slate-700",
+  draft_generated: "bg-blue-100 text-blue-800",
+  pending_review: "bg-amber-100 text-amber-800",
+  approved: "bg-emerald-100 text-emerald-800",
+  sent: "bg-slate-900 text-white",
+  on_hold: "bg-orange-100 text-orange-800",
+  error: "bg-red-100 text-red-800",
+};
+
 function todayLocalIso(): string {
   const d = new Date();
   const y = d.getFullYear();
@@ -61,10 +109,12 @@ export default function Page() {
     constructionDate: "",
   });
   const [result, setResult] = useState<GenerateResponse | null>(null);
+  const [currentStatus, setCurrentStatus] = useState<EmailStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [editedBody, setEditedBody] = useState<string | null>(null);
   const [copyHint, setCopyHint] = useState<string | null>(null);
+  const [statusHint, setStatusHint] = useState<string | null>(null);
 
   const canGenerate = useMemo(() => {
     return (
@@ -87,6 +137,7 @@ export default function Page() {
     setIsGenerating(true);
     setError(null);
     setCopyHint(null);
+    setStatusHint(null);
     try {
       const payload: Record<string, unknown> = {
         customerName: form.customerName.trim(),
@@ -116,6 +167,7 @@ export default function Page() {
       }
       const data: GenerateResponse = await res.json();
       setResult(data);
+      setCurrentStatus(data.status);
       setEditedBody(null);
     } catch (e) {
       setError(`通信エラー: ${(e as Error).message}`);
@@ -137,12 +189,62 @@ export default function Page() {
     }
   }
 
+  async function persistBodyEdit(): Promise<boolean> {
+    if (!result || editedBody === null || editedBody === result.body) return true;
+    const res = await fetch(`/api/thank-you-email/${result.id}/body`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: editedBody }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setStatusHint(`本文保存に失敗: ${JSON.stringify(j)}`);
+      return false;
+    }
+    return true;
+  }
+
+  async function changeStatus(to: EmailStatus) {
+    if (!result) return;
+    setStatusHint(null);
+    if (to === "sent") {
+      const ok = await persistBodyEdit();
+      if (!ok) return;
+      const res = await fetch(`/api/thank-you-email/${result.id}/mark-sent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sentBy: "operator" }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setStatusHint(`送信済み登録に失敗: ${JSON.stringify(j)}`);
+        return;
+      }
+      const updated: ThankYouEmailRecord = await res.json();
+      setCurrentStatus(updated.status);
+      setStatusHint("送信済みとして記録しました");
+      return;
+    }
+    const res = await fetch(`/api/thank-you-email/${result.id}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: to, actor: "operator" }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setStatusHint(`遷移に失敗: ${JSON.stringify(j)}`);
+      return;
+    }
+    const updated: ThankYouEmailRecord = await res.json();
+    setCurrentStatus(updated.status);
+  }
+
   return (
     <main className="mx-auto max-w-7xl px-6 py-8">
       <header className="mb-8">
         <h1 className="text-2xl font-bold text-slate-900">契約後 39 メール生成</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Human in the Loop 型 — 入力 → テンプレート分岐 → リスクチェック → 人間確認 → コピー送信
+          Human in the Loop 型 — 入力 → テンプレート分岐 → リスクチェック → 人間確認 → コピー送信 → 送信済み記録
         </p>
       </header>
 
@@ -157,11 +259,15 @@ export default function Page() {
         />
         <ResultPanel
           result={result}
+          status={currentStatus}
           error={error}
           editedBody={editedBody}
           onEditBody={setEditedBody}
           onCopy={handleCopy}
           copyHint={copyHint}
+          onChangeStatus={changeStatus}
+          statusHint={statusHint}
+          onPersistBody={persistBodyEdit}
         />
       </div>
     </main>
@@ -301,7 +407,6 @@ function FormPanel(props: {
       >
         {isGenerating ? "生成中…" : "39 メール生成"}
       </button>
-
     </section>
   );
 }
@@ -350,15 +455,80 @@ function RadioPill({
   );
 }
 
+function StatusActions({
+  status,
+  onChangeStatus,
+}: {
+  status: EmailStatus;
+  onChangeStatus: (to: EmailStatus) => void;
+}) {
+  if (status === "sent") {
+    return (
+      <div className="text-xs text-slate-500">送信済み — これ以上の操作はできません</div>
+    );
+  }
+
+  const buttons: { label: string; to: EmailStatus; variant: "primary" | "ghost" }[] = [];
+
+  if (status === "draft_generated") {
+    buttons.push({ label: "確認に回す", to: "pending_review", variant: "primary" });
+    buttons.push({ label: "保留", to: "on_hold", variant: "ghost" });
+  } else if (status === "pending_review") {
+    buttons.push({ label: "承認", to: "approved", variant: "primary" });
+    buttons.push({ label: "下書きに戻す", to: "draft_generated", variant: "ghost" });
+    buttons.push({ label: "保留", to: "on_hold", variant: "ghost" });
+  } else if (status === "approved") {
+    buttons.push({ label: "送信済みにする", to: "sent", variant: "primary" });
+    buttons.push({ label: "承認取消", to: "pending_review", variant: "ghost" });
+    buttons.push({ label: "保留", to: "on_hold", variant: "ghost" });
+  } else if (status === "on_hold") {
+    buttons.push({ label: "下書きに戻す", to: "draft_generated", variant: "ghost" });
+    buttons.push({ label: "確認に回す", to: "pending_review", variant: "primary" });
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {buttons.map((b) => (
+        <button
+          key={b.to + b.label}
+          onClick={() => onChangeStatus(b.to)}
+          className={
+            b.variant === "primary"
+              ? "rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+              : "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-500"
+          }
+        >
+          {b.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ResultPanel(props: {
   result: GenerateResponse | null;
+  status: EmailStatus | null;
   error: string | null;
   editedBody: string | null;
   onEditBody: (v: string | null) => void;
   onCopy: () => void;
   copyHint: string | null;
+  onChangeStatus: (to: EmailStatus) => void;
+  statusHint: string | null;
+  onPersistBody: () => Promise<boolean>;
 }) {
-  const { result, error, editedBody, onEditBody, onCopy, copyHint } = props;
+  const {
+    result,
+    status,
+    error,
+    editedBody,
+    onEditBody,
+    onCopy,
+    copyHint,
+    onChangeStatus,
+    statusHint,
+    onPersistBody,
+  } = props;
   const [isEditing, setIsEditing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -378,7 +548,7 @@ function ResultPanel(props: {
     );
   }
 
-  if (!result) {
+  if (!result || !status) {
     return (
       <section className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-500">
         左フォームを埋めて「39 メール生成」を押すと、生成結果がここに表示されます。
@@ -388,9 +558,27 @@ function ResultPanel(props: {
 
   const displayBody = editedBody ?? result.body;
   const criticalFlags = result.riskFlags.filter((f) => f.severity === "critical");
+  const editLocked = status === "sent";
 
   return (
     <section className="space-y-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-bold ${STATUS_STYLE[status]}`}
+            >
+              {STATUS_LABEL[status]}
+            </span>
+            <code className="text-xs text-slate-400">{result.id}</code>
+          </div>
+          <StatusActions status={status} onChangeStatus={onChangeStatus} />
+        </div>
+        {statusHint && (
+          <div className="mt-3 text-xs text-emerald-700">{statusHint}</div>
+        )}
+      </div>
+
       {result.riskFlags.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="mb-3 text-sm font-semibold text-slate-900">
@@ -430,8 +618,10 @@ function ResultPanel(props: {
           <h3 className="text-sm font-semibold text-slate-900">本文</h3>
           <div className="flex gap-2">
             <button
-              onClick={() => {
+              disabled={editLocked}
+              onClick={async () => {
                 if (isEditing) {
+                  await onPersistBody();
                   setIsEditing(false);
                 } else {
                   setIsEditing(true);
@@ -439,7 +629,7 @@ function ResultPanel(props: {
                   setTimeout(() => textareaRef.current?.focus(), 50);
                 }
               }}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-500"
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isEditing ? "編集を確定" : "編集"}
             </button>
@@ -463,9 +653,7 @@ function ResultPanel(props: {
             {displayBody}
           </pre>
         )}
-        {copyHint && (
-          <div className="mt-2 text-xs text-emerald-700">{copyHint}</div>
-        )}
+        {copyHint && <div className="mt-2 text-xs text-emerald-700">{copyHint}</div>}
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

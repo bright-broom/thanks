@@ -42,3 +42,6 @@ pnpm-debug.log*
 .vscode/
 *.swp
 *.swo
+
+# PoC local store (JSON-backed stand-in for Supabase)
+.local-store/

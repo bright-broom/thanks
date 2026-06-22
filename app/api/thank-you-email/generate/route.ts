@@ -4,6 +4,7 @@ import { validate } from "@/src/domain/validate.ts";
 import { defaultTemplateConfig } from "@/src/config/templateConfig.ts";
 import { generateRequestSchema } from "@/src/api/generateRequestSchema.ts";
 import { todayInJst } from "@/src/api/today.ts";
+import { getEmailStore } from "@/src/store/emailStore.ts";
 import type { ComposeInput } from "@/src/types.ts";
 
 export const runtime = "nodejs";
@@ -44,11 +45,30 @@ export async function POST(request: Request) {
     today: todayInJst(),
   });
 
+  const store = getEmailStore();
+  const saved = store.insert({
+    status: "draft_generated",
+    input,
+    draft,
+    riskFlags,
+  });
+  store.appendAudit({
+    emailId: saved.id,
+    action: "generate",
+    actor: "system",
+    toStatus: "draft_generated",
+    riskFlagCount: riskFlags.length,
+  });
+
   return NextResponse.json({
+    id: saved.id,
+    status: saved.status,
     templateType: draft.templateType,
     subject: draft.subject,
     body: draft.body,
     nextTask: draft.nextTask,
     riskFlags,
+    createdAt: saved.createdAt,
+    updatedAt: saved.updatedAt,
   });
 }
